@@ -36,7 +36,7 @@ from splat_math import ALPHA_CUTOFF, SUPPORT_RADIUS_SQUARED, quaternion_to_matri
 # the full 3-sigma disc. `beta` scales how quickly that happens. Note the Warp trainers use
 # `compact_box.beta = 0.5`; these renderers keep 1.0, which is what v2 and v3 have always applied.
 COMPACT_BOX_BETA = 1.0
-
+TRANSMITTANCE_CUTOFF = 1.0e-4
 
 def compact_support(opacities: np.ndarray) -> np.ndarray:
     """Per-splat squared-Mahalanobis cutoff.
@@ -148,7 +148,7 @@ class CpuRenderer:
     def render(
         self,
         splats: GaussianSet,
-        background: tuple[float, float, float] = (1.0, 1.0, 1.0),
+        background: tuple[float, float, float] = (0.0, 0.0, 0.0),
     ) -> np.ndarray:
         projected = project_gaussians(
             splats,
@@ -169,9 +169,45 @@ class CpuRenderer:
                 # TODO: Calculate the RGB value at (x, y)
                 # Composite the sorted splats front to back, then finish with the
                 # background weighted by the remaining transmittance.
+                
+                # first find displacements
+                d = np.array([x, y], dtype=np.float32) - projected.centres
 
-                # TODO: The RHS is a placeholder
-                image[py, px] = np.zeros(3, dtype=np.float32)
+                # find squared Mahalanobis distances
+                A = projected.conics[:, 0]
+                B = projected.conics[:, 1]
+                C = projected.conics[:, 2]
+                du = d[:, 0]
+                dv = d[:, 1]
+                q = A * du ** 2 + 2 * B * du * dv + C * dv ** 2
+
+                # calculate weights
+                w = np.exp(-q / 2)
+
+                # reset pixel to empty color
+                image[py, px] = 0.0
+
+                # traverse by sorted order
+                transmittance = 1.0
+                for i in range(len(projected.centres)):
+                    if q[i] < supports[i]: # cap to provided q_max
+                        alpha = projected.opacities[i] * w[i]
+
+                        # skip if contribution is invisible
+                        if alpha <= ALPHA_CUTOFF: 
+                            continue
+
+                        # composite the color
+                        color = projected.colors[i]
+                        image[py, px] += color * transmittance * alpha
+                        transmittance *= (1.0 - alpha)
+
+                        # stop walking early if transmittance too low
+                        if transmittance < TRANSMITTANCE_CUTOFF:
+                            break
+
+                # finally add background color
+                image[py, px] += transmittance * background_color
 
         return image
 

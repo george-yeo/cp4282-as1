@@ -69,8 +69,50 @@ def rasterize_tiles(
     # which the builder has already sorted near to far. Finish with the background
     # weighted by the remaining transmittance, matching 3dgs_renderer_v1.
 
-    # TODO: The RHS is a placeholder
-    image[pixel] = wp.vec3(0.0, 0.0, 0.0)
+    # start with empty color
+    result = wp.vec3(0.0, 0.0, 0.0)
+
+    # traverse by sorted order
+    transmittance = float(1.0)
+    
+    p = wp.vec2(px, py)
+    for pairId in range(tile_offsets[tile], tile_offsets[tile + 1]):
+        # mask away high 32 bits of tile index
+        pair = packed_pairs[pairId]
+        i = wp.int32(pair & wp.uint64(0xFFFFFFFF))
+
+        # first find displacement
+        d = p - centres[i]
+
+        # find squared Mahalanobis distances
+        A = conics[i][0]
+        B = conics[i][1]
+        C = conics[i][2]
+        du = d[0]
+        dv = d[1]
+        q = A * du * du + 2.0 * B * du * dv + C * dv * dv
+
+        # calculate weight
+        w = wp.exp(-q / 2.0)
+
+        if q < supports[i]: # cap to provided q_max
+            alpha = opacities[i] * w
+
+            # skip if contribution is invisible
+            if alpha <= ALPHA_CUTOFF:
+                continue
+
+            # composite the color
+            color = colours[i]
+            result = result + color * transmittance * alpha
+            transmittance = transmittance * (1.0 - alpha)
+
+            # stop walking early if transmittance too low
+            if transmittance < TRANSMITTANCE_CUTOFF:
+                break
+
+    # finally add background color
+    image[pixel] = result + transmittance * background
 
 
 class GaussianFirstWarpRenderer:
@@ -121,7 +163,7 @@ class GaussianFirstWarpRenderer:
         )
 
     def render(self, splats: GaussianSet, camera: Camera,
-               background: tuple[float, float, float] = (1.0, 1.0, 1.0)) -> np.ndarray:
+               background: tuple[float, float, float] = (0.0, 0.0, 0.0)) -> np.ndarray:
         projected = project_gaussians(splats, camera)
         count = len(projected.opacities)
 
