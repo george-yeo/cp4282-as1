@@ -102,7 +102,7 @@ class WarpRenderer:
         self.image = wp.zeros(width * height, dtype=wp.vec3, device=self.device)
 
     def render(self, splats: GaussianSet, camera: Camera,
-               background: tuple[float, float, float] = (0.0, 0.0, 0.0)) -> np.ndarray:
+               background: tuple[float, float, float] = (1.0, 1.0, 1.0)) -> np.ndarray:
         projected = project_gaussians(splats, camera)
         count = len(projected.opacities)
         if count > self.maximum_splats:
